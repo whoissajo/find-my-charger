@@ -1,0 +1,20 @@
+{
+  "framework": "nextjs",
+  "regions": ["bom1"],
+  "functions": {
+    "app/api/chargers/route.ts": {
+      "maxDuration": 30
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/chargers",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=300, s-maxage=1800, stale-while-revalidate=3600"
+        }
+      ]
+    }
+  ]
+}

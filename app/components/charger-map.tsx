@@ -1,45 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AttributionControl,
-  Map as MapLibreMap,
-  Marker as MapLibreMarker,
-  NavigationControl,
-} from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import type {
+  Map as LeafletMap,
+  Marker as LeafletMarker,
+} from "leaflet";
+import { STARTER_CHARGERS, type ChargerRecord, type ChargerType } from "@/app/data/chargers";
+import "leaflet/dist/leaflet.css";
 
-type ChargerType = "AC" | "DC" | "AC/DC" | "Unknown";
-
-type Charger = {
-  id: string;
-  name: string;
-  lat: number;
-  lon: number;
-  type: ChargerType;
-  powerKw: number | null;
-  connectors: string[];
-  operator: string | null;
-  address: string | null;
-  area: string | null;
-  access: string | null;
-  openingHours: string | null;
-  osmUrl: string;
-};
-
+type Charger = ChargerRecord;
 type ApiPayload = {
   chargers: Charger[];
   count: number;
   source: string;
   fetchedAt: string;
-  error?: string;
+  usingFallback?: boolean;
+  note?: string;
+  warning?: string;
 };
-
 type Filter = "ALL" | "DC" | "AC";
 type UserLocation = { lat: number; lon: number };
+type LeafletNamespace = typeof import("leaflet");
 
-const LAHORE_CENTER: [number, number] = [74.3587, 31.5204];
-const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+const LAHORE_CENTER: [number, number] = [31.5204, 74.3587];
+const CARTO_TILES =
+  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+const OSM_TILES = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 
 function distanceKm(from: UserLocation, to: Charger): number {
   const radians = (degrees: number) => (degrees * Math.PI) / 180;
@@ -63,19 +49,19 @@ function chargerKindLabel(type: ChargerType): string {
   return `${type} charging`;
 }
 
-function accessLabel(access: string | null): string {
-  if (!access) return "Access not listed";
-  if (access === "private") return "Private access";
-  if (access === "customers") return "For customers";
-  if (access === "yes" || access === "permissive") return "Public access";
-  return access.replaceAll("_", " ");
-}
-
 function PinIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z" />
       <circle cx="12" cy="10" r="2.5" />
+    </svg>
+  );
+}
+
+function BoltIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M13.4 2.8 5.8 13h5.1l-.5 8.2 7.8-10.5h-5.1l.3-7.9Z" />
     </svg>
   );
 }
@@ -107,9 +93,7 @@ function ChargerCard({
       aria-pressed={selected}
     >
       <span className={`station-card-icon ${typeClass}`}>
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M13.4 2.8 5.8 13h5.1l-.5 8.2 7.8-10.5h-5.1l.3-7.9Z" />
-        </svg>
+        <BoltIcon />
       </span>
       <span className="station-card-content">
         <span className="station-card-title">{charger.name}</span>
@@ -133,17 +117,23 @@ function ChargerCard({
 
 export default function ChargerMap() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
-  const markersRef = useRef<MapLibreMarker[]>([]);
+  const mapRef = useRef<LeafletMap | null>(null);
+  const leafletRef = useRef<LeafletNamespace | null>(null);
+  const markersRef = useRef<LeafletMarker[]>([]);
 
-  const [chargers, setChargers] = useState<Charger[]>([]);
+  // Seed the first render with published Lahore locations. The map never waits
+  // for a third-party Overpass request before showing useful content.
+  const [chargers, setChargers] = useState<Charger[]>(STARTER_CHARGERS);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sourceNote, setSourceNote] = useState<string | null>(null);
   const [sourceTime, setSourceTime] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("ALL");
   const [selected, setSelected] = useState<Charger | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [usingOsmTiles, setUsingOsmTiles] = useState(false);
   const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
   const [locating, setLocating] = useState(false);
   const [locationMessage, setLocationMessage] = useState<string | null>(null);
@@ -152,21 +142,26 @@ export default function ChargerMap() {
     setLoading(true);
     setLoadError(null);
     try {
-      const response = await fetch("/api/chargers", { cache: "no-store" });
+      const response = await fetch("/api/chargers", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(20000),
+      });
       const payload = (await response.json()) as ApiPayload;
       if (!response.ok) {
-        throw new Error(payload.error || "Unable to load charger data.");
+        throw new Error(payload.warning || "Unable to refresh the charger directory.");
       }
       if (!Array.isArray(payload.chargers)) {
         throw new Error("The charger service returned an unexpected response.");
       }
-      setChargers(payload.chargers);
+      setChargers(payload.chargers.length ? payload.chargers : STARTER_CHARGERS);
       setSourceTime(payload.fetchedAt || null);
+      setSourceNote(payload.note || null);
     } catch (error) {
+      // Keep the bundled records visible if a public data service is down.
       const message =
-        error instanceof Error ? error.message : "Something went wrong while loading.";
+        error instanceof Error ? error.message : "The live charger feed could not be refreshed.";
       setLoadError(message);
-      setChargers([]);
+      setSourceNote("Showing published Lahore charger records. Live map data could not be refreshed.");
     } finally {
       setLoading(false);
     }
@@ -176,44 +171,104 @@ export default function ChargerMap() {
     void loadChargers();
   }, [loadChargers]);
 
+  // Leaflet uses ordinary image tiles and DOM markers, so it does not depend on
+  // WebGL being enabled in the visitor's browser.
   useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
+    let disposed = false;
 
-    const map = new MapLibreMap({
-      container: mapContainerRef.current,
-      style: MAP_STYLE,
-      center: LAHORE_CENTER,
-      zoom: 11.25,
-      minZoom: 9,
-      maxZoom: 19,
-      maxBounds: [
-        [73.72, 31.08],
-        [74.93, 31.88],
-      ],
-      attributionControl: false,
-      cooperativeGestures: true,
-    });
+    async function initializeMap() {
+      try {
+        const L = await import("leaflet");
+        if (disposed || !mapContainerRef.current) return;
 
-    map.addControl(
-      new NavigationControl({ showCompass: false, visualizePitch: false }),
-      "top-right",
-    );
-    map.addControl(
-      new AttributionControl({
-        compact: true,
-        customAttribution: "EV locations © OpenStreetMap contributors",
-      }),
-      "bottom-right",
-    );
+        leafletRef.current = L;
+        const map = L.map(mapContainerRef.current, {
+          center: LAHORE_CENTER,
+          zoom: 11.25,
+          minZoom: 9,
+          maxZoom: 19,
+          maxBounds: L.latLngBounds(
+            L.latLng(31.08, 73.72),
+            L.latLng(31.88, 74.93),
+          ),
+          maxBoundsViscosity: 0.8,
+          zoomControl: false,
+          attributionControl: false,
+          preferCanvas: true,
+        });
 
-    map.on("load", () => setMapReady(true));
-    mapRef.current = map;
+        mapRef.current = map;
+        L.control.zoom({ position: "topright" }).addTo(map);
+        L.control.attribution({ position: "bottomright", prefix: false }).addTo(map);
+
+        const attribution =
+          '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> &copy; <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>';
+
+        const carto = L.tileLayer(CARTO_TILES, {
+          subdomains: "abcd",
+          maxZoom: 20,
+          attribution,
+          crossOrigin: true,
+        });
+
+        let tileErrors = 0;
+        let fallbackStarted = false;
+        let fallbackErrors = 0;
+
+        const startOsmFallback = () => {
+          if (fallbackStarted || disposed || !mapRef.current) return;
+          fallbackStarted = true;
+          setUsingOsmTiles(true);
+          if (map.hasLayer(carto)) map.removeLayer(carto);
+
+          const osm = L.tileLayer(OSM_TILES, {
+            subdomains: "abc",
+            maxZoom: 19,
+            attribution:
+              '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a>',
+            crossOrigin: true,
+          });
+
+          osm.on("tileerror", () => {
+            fallbackErrors += 1;
+            if (fallbackErrors >= 4 && !disposed) {
+              setMapError("Map tiles could not be reached. Check your internet connection and reload.");
+            }
+          });
+          osm.addTo(map);
+        };
+
+        carto.on("tileerror", () => {
+          tileErrors += 1;
+          if (tileErrors >= 3) startOsmFallback();
+        });
+        carto.addTo(map);
+
+        map.whenReady(() => {
+          if (!disposed) setMapReady(true);
+        });
+        // Mark the map ready even if a tile provider is slow; tile fallback is
+        // handled independently and the user can still see the published pins.
+        window.setTimeout(() => {
+          if (!disposed) setMapReady(true);
+        }, 2500);
+      } catch {
+        if (!disposed) {
+          setMapReady(true);
+          setMapError("The interactive map could not start in this browser.");
+        }
+      }
+    }
+
+    void initializeMap();
 
     return () => {
+      disposed = true;
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
-      map.remove();
+      mapRef.current?.remove();
       mapRef.current = null;
+      leafletRef.current = null;
     };
   }, []);
 
@@ -229,6 +284,7 @@ export default function ChargerMap() {
           charger.operator,
           charger.address,
           charger.area,
+          charger.source,
           ...charger.connectors,
         ]
           .filter(Boolean)
@@ -245,46 +301,48 @@ export default function ChargerMap() {
   const stats = useMemo(() => {
     const dc = chargers.filter((charger) => charger.type === "DC" || charger.type === "AC/DC").length;
     const ac = chargers.filter((charger) => charger.type === "AC" || charger.type === "AC/DC").length;
-    const powerKnown = chargers.filter((charger) => charger.powerKw !== null).length;
-    return { total: chargers.length, dc, ac, powerKnown };
+    return { total: chargers.length, dc, ac };
   }, [chargers]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady) return;
+    const L = leafletRef.current;
+    if (!map || !L || !mapReady) return;
 
     markersRef.current.forEach((marker) => marker.remove());
     markersRef.current = visibleChargers.map((charger) => {
-      const element = document.createElement("button");
       const tone =
         charger.type === "DC" || charger.type === "AC/DC"
           ? "pin-dc"
           : charger.type === "AC"
             ? "pin-ac"
             : "pin-unknown";
-      element.type = "button";
-      element.className = `map-pin ${tone}${selected?.id === charger.id ? " map-pin-selected" : ""}`;
-      element.setAttribute("aria-label", `Select ${charger.name}`);
-      element.setAttribute("title", charger.name);
-      element.innerHTML = "<span></span>";
-      element.addEventListener("click", () => {
-        setSelected(charger);
+      const selectedClass = selected?.id === charger.id ? " map-pin-selected" : "";
+      const icon = L.divIcon({
+        className: "leaflet-charger-marker",
+        html: `<div class="map-pin ${tone}${selectedClass}"><span></span></div>`,
+        iconSize: [35, 35],
+        iconAnchor: [17, 17],
       });
-      return new MapLibreMarker({ element, anchor: "center" })
-        .setLngLat([charger.lon, charger.lat])
-        .addTo(map);
+      const marker = L.marker([charger.lat, charger.lon], {
+        icon,
+        title: charger.name,
+        alt: charger.name,
+        keyboard: true,
+      });
+      marker.on("click", () => setSelected(charger));
+      marker.addTo(map);
+      return marker;
     });
   }, [visibleChargers, mapReady, selected]);
 
   useEffect(() => {
     if (!selected || !mapRef.current) return;
-    mapRef.current.flyTo({
-      center: [selected.lon, selected.lat],
-      zoom: Math.max(mapRef.current.getZoom(), 14.2),
-      speed: 1.15,
-      curve: 1.35,
-      essential: true,
-    });
+    mapRef.current.flyTo(
+      [selected.lat, selected.lon],
+      Math.max(mapRef.current.getZoom(), 14.2),
+      { duration: 0.9 },
+    );
   }, [selected]);
 
   const handleLocate = () => {
@@ -301,12 +359,7 @@ export default function ChargerMap() {
           lon: position.coords.longitude,
         };
         setUserLocation(nextLocation);
-        mapRef.current?.flyTo({
-          center: [nextLocation.lon, nextLocation.lat],
-          zoom: 13.4,
-          speed: 1.1,
-          essential: true,
-        });
+        mapRef.current?.flyTo([nextLocation.lat, nextLocation.lon], 13.4, { duration: 0.9 });
         setLocating(false);
       },
       () => {
@@ -338,8 +391,9 @@ export default function ChargerMap() {
           address: charger.address,
           access: charger.access,
           opening_hours: charger.openingHours,
-          source: "OpenStreetMap",
-          osm_url: charger.osmUrl,
+          reported_status: charger.reportedStatus,
+          source: charger.source,
+          source_url: charger.sourceUrl,
         },
       })),
     };
@@ -358,12 +412,7 @@ export default function ChargerMap() {
   };
 
   const focusLahore = () => {
-    mapRef.current?.flyTo({
-      center: LAHORE_CENTER,
-      zoom: 11.25,
-      speed: 1.15,
-      essential: true,
-    });
+    mapRef.current?.flyTo(LAHORE_CENTER, 11.25, { duration: 0.9 });
     setSelected(null);
   };
 
@@ -390,15 +439,15 @@ export default function ChargerMap() {
 
           <div className="stats-grid" aria-label="Mapped charger statistics">
             <div className="stat-card stat-primary">
-              <span className="stat-number">{loading ? "—" : stats.total}</span>
+              <span className="stat-number">{stats.total}</span>
               <span className="stat-label">Mapped stations</span>
             </div>
             <div className="stat-card">
-              <span className="stat-number">{loading ? "—" : stats.dc}</span>
+              <span className="stat-number">{stats.dc}</span>
               <span className="stat-label">DC capable</span>
             </div>
             <div className="stat-card">
-              <span className="stat-number">{loading ? "—" : stats.ac}</span>
+              <span className="stat-number">{stats.ac}</span>
               <span className="stat-label">AC capable</span>
             </div>
           </div>
@@ -443,38 +492,30 @@ export default function ChargerMap() {
               <span className="section-kicker">THE NETWORK</span>
               <h2>Charging points</h2>
             </div>
-            <span className="result-count">{loading ? "…" : visibleChargers.length.toString().padStart(2, "0")} <span>shown</span></span>
+            <span className="result-count">{visibleChargers.length.toString().padStart(2, "0")} <span>shown</span></span>
           </div>
 
+          {loadError ? (
+            <div className="data-notice" role="status">
+              Live data could not refresh. Showing published Lahore charger records.
+              <button type="button" onClick={() => void loadChargers()}>Retry</button>
+            </div>
+          ) : null}
+
           {loading ? (
-            <div className="loading-list" aria-live="polite">
-              <div className="loading-line" />
-              <div className="loading-line" />
-              <div className="loading-line" />
+            <div className="directory-refresh" aria-live="polite">
+              <span className="refresh-dot" /> Refreshing public charger data…
             </div>
-          ) : loadError ? (
-            <div className="empty-state empty-error" role="alert">
-              <span className="empty-icon">!</span>
-              <strong>Couldn’t reach the charger directory</strong>
-              <p>{loadError}</p>
-              <button type="button" className="text-action" onClick={() => void loadChargers()}>
-                Try again <span aria-hidden="true">↗</span>
-              </button>
-            </div>
-          ) : visibleChargers.length === 0 ? (
+          ) : null}
+
+          {visibleChargers.length === 0 ? (
             <div className="empty-state">
               <span className="empty-icon"><PinIcon /></span>
-              <strong>{chargers.length === 0 ? "No mapped stations returned" : "No matching stations"}</strong>
-              <p>
-                {chargers.length === 0
-                  ? "There may be chargers that have not yet been added to OpenStreetMap. Check the community directories or help map one."
-                  : "Try another search or switch the charger filter."}
-              </p>
-              {search || filter !== "ALL" ? (
-                <button type="button" className="text-action" onClick={() => { setSearch(""); setFilter("ALL"); }}>
-                  Clear filters <span aria-hidden="true">↗</span>
-                </button>
-              ) : null}
+              <strong>No matching stations</strong>
+              <p>Try another search or switch the charger filter.</p>
+              <button type="button" className="text-action" onClick={() => { setSearch(""); setFilter("ALL"); }}>
+                Clear filters <span aria-hidden="true">↗</span>
+              </button>
             </div>
           ) : (
             <div className="station-list" aria-live="polite">
@@ -490,13 +531,18 @@ export default function ChargerMap() {
             </div>
           )}
 
+          {sourceNote ? <p className="source-note">{sourceNote}</p> : null}
+
           <div className="directory-links">
             <span className="section-kicker">MORE WAYS TO FIND A CHARGE</span>
+            <a href="https://openchargemap.org/poi?CountryIDs=170&CountryName=pakistan" target="_blank" rel="noreferrer">
+              Open Charge Map Pakistan <span aria-hidden="true">↗</span>
+            </a>
+            <a href="https://chargemap-pk.zeeshanai.cloud/chargers/lahore" target="_blank" rel="noreferrer">
+              ChargeMap PK Lahore directory <span aria-hidden="true">↗</span>
+            </a>
             <a href="https://evlink.pk/map/?city=lahore" target="_blank" rel="noreferrer">
               EV Link Lahore directory <span aria-hidden="true">↗</span>
-            </a>
-            <a href="https://chargepk.com/ev-charging-stations-lahore.html" target="_blank" rel="noreferrer">
-              ChargePK Lahore directory <span aria-hidden="true">↗</span>
             </a>
           </div>
         </div>
@@ -518,7 +564,7 @@ export default function ChargerMap() {
               type="button"
               className="export-button"
               onClick={handleExport}
-              disabled={loading || visibleChargers.length === 0}
+              disabled={visibleChargers.length === 0}
             >
               Export GeoJSON <span aria-hidden="true">↓</span>
             </button>
@@ -536,7 +582,7 @@ export default function ChargerMap() {
             <span className="map-status-icon"><PinIcon /></span>
             <span>
               <strong>LAHORE NETWORK MAP</strong>
-              <small>{loading ? "Loading public map data…" : loadError ? "Data source unavailable" : `${stats.total} mapped locations`}</small>
+              <small>{loading ? `${stats.total} published locations · refreshing` : `${stats.total} mapped locations`}</small>
             </span>
           </div>
           <div className="map-action-group">
@@ -572,6 +618,13 @@ export default function ChargerMap() {
           </div>
         ) : null}
 
+        {mapError ? (
+          <div className="map-message map-error-message" role="status">
+            {mapError}
+            <button type="button" onClick={() => setMapError(null)} aria-label="Dismiss message">×</button>
+          </div>
+        ) : null}
+
         <div className="map-bottom-left">
           {selected ? (
             <div className="selected-station-card">
@@ -582,6 +635,10 @@ export default function ChargerMap() {
                 {chargerKindLabel(selected.type)} · {powerLabel(selected.powerKw)}
               </span>
               <span className="selected-meta">{selected.area || selected.address || "Location mapped in Lahore"}</span>
+              {selected.reportedStatus ? (
+                <span className="selected-meta">{selected.reportedStatus} · not a live status feed</span>
+              ) : null}
+              <span className="selected-meta">{selected.access || "Access not listed"}</span>
               <span className="selected-actions">
                 <a
                   href={`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lon}&travelmode=driving`}
@@ -590,7 +647,9 @@ export default function ChargerMap() {
                 >
                   Get directions ↗
                 </a>
-                <a href={selected.osmUrl} target="_blank" rel="noreferrer">OSM record ↗</a>
+                <a href={selected.sourceUrl} target="_blank" rel="noreferrer">
+                  {selected.source} record ↗
+                </a>
               </span>
             </div>
           ) : (
@@ -608,8 +667,8 @@ export default function ChargerMap() {
         </div>
 
         <div className="map-footnote">
-          <span>DATA FROM OPENSTREETMAP</span>
-          <span>{updatedLabel ? `Retrieved ${updatedLabel}` : "Community mapped · not live status"}</span>
+          <span>DATA: OPENSTREETMAP + OPEN CHARGE MAP</span>
+          <span>{updatedLabel ? `Updated ${updatedLabel}` : usingOsmTiles ? "OpenStreetMap tiles" : "Published community records"}</span>
         </div>
       </section>
     </div>

@@ -46,28 +46,52 @@
     .setView(C.CENTER, 12);
   L.control.zoom({ position: 'topright' }).addTo(map);
 
+  const OSMA = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  const ESRI = 'Tiles &copy; Esri &mdash; Esri, Maxar, Earthstar Geographics, and the GIS User Community';
   const TILES = {
-    light: { url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', sub: 'abcd', attr: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
-    dark: { url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', sub: 'abcd', attr: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
-    osm: { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', sub: 'abc', attr: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }
+    light: { url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', sub: 'abcd', attr: OSMA + ' &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+    dark: { url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', sub: 'abcd', attr: OSMA + ' &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+    osm: { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', sub: 'abc', attr: OSMA },
+    sat: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', sub: '', attr: ESRI,
+      labels: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}' },
+    esri: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', sub: '', attr: ESRI },
+    topo: { url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', sub: 'abc', maxNative: 17,
+      attr: 'Map data: ' + OSMA + ', <a href="https://viewfinderpanoramas.org">SRTM</a> | Style: <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }
   };
-  let tileLayer = null, tileErrors = 0;
+  const STYLES = [['auto', 'Auto (light / dark)'], ['osm', 'OpenStreetMap'], ['esri', 'Esri Streets'], ['sat', 'Satellite'], ['topo', 'Terrain']];
+  const styleName = k => (STYLES.find(s => s[0] === k) || STYLES[0])[1].replace(/ \(.*\)/, '');
+  let tileLayer = null, labelLayer = null, tileErrors = 0;
   function applyTiles() {
-    const key = state.tileStyle === 'osm' ? 'osm' : (theme() === 'dark' ? 'dark' : 'light');
+    const key = state.tileStyle === 'auto' ? (theme() === 'dark' ? 'dark' : 'light') : state.tileStyle;
     const t = TILES[key];
     if (tileLayer) map.removeLayer(tileLayer);
+    if (labelLayer) { map.removeLayer(labelLayer); labelLayer = null; }
     tileErrors = 0;
-    tileLayer = L.tileLayer(t.url, { subdomains: t.sub, attribution: t.attr, maxZoom: 19, detectRetina: false }).addTo(map);
+    tileLayer = L.tileLayer(t.url, { subdomains: t.sub || 'abc', attribution: t.attr, maxZoom: 19, maxNativeZoom: t.maxNative || 19, detectRetina: false }).addTo(map);
+    if (t.labels) labelLayer = L.tileLayer(t.labels, { maxZoom: 19, maxNativeZoom: 19, pane: 'shadowPane', opacity: .95 }).addTo(map);
     tileLayer.on('tileerror', () => {
-      // If CARTO is blocked on this network, fall back to plain OSM tiles.
-      if (++tileErrors === 6 && key !== 'osm') { state.tileStyle = 'osm'; $('#styleBtn').textContent = 'Map: OSM'; applyTiles(); toast('Switched to OpenStreetMap tiles'); }
+      // If this tile host is blocked on the network, fall back to plain OSM tiles.
+      if (++tileErrors === 6 && key !== 'osm') { setStyle('osm'); toast('Tiles unavailable here — switched to OpenStreetMap'); }
     });
   }
-  $('#styleBtn').onclick = () => {
-    state.tileStyle = state.tileStyle === 'auto' ? 'osm' : 'auto';
-    $('#styleBtn').textContent = state.tileStyle === 'auto' ? 'Map: Auto' : 'Map: OSM';
-    applyTiles();
-  };
+  function setStyle(k) {
+    state.tileStyle = k; save('lev:tiles', k);
+    $('#styleBtn').textContent = 'Map: ' + styleName(k);
+    applyTiles(); renderStyleMenu();
+  }
+  function renderStyleMenu() {
+    const m = $('#styleMenu');
+    m.innerHTML = STYLES.map(([k, n]) => '<button role="menuitemradio" aria-checked="' + (k === state.tileStyle) + '" data-k="' + k + '">' + n + '</button>').join('');
+  }
+  const menu = document.createElement('div');
+  menu.id = 'styleMenu'; menu.className = 'style-menu'; menu.setAttribute('role', 'menu'); menu.hidden = true;
+  $('#styleBtn').after(menu);
+  menu.addEventListener('click', e => { const b = e.target.closest('button[data-k]'); if (b) { setStyle(b.dataset.k); menu.hidden = true; } });
+  $('#styleBtn').onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+  document.addEventListener('click', () => { menu.hidden = true; });
+  if (STYLES.some(s => s[0] === load('lev:tiles', 'auto'))) state.tileStyle = load('lev:tiles', 'auto');
+  $('#styleBtn').textContent = 'Map: ' + styleName(state.tileStyle);
+  renderStyleMenu();
 
   const cluster = L.markerClusterGroup({
     showCoverageOnHover: false, maxClusterRadius: 48, spiderfyOnMaxZoom: true,
@@ -246,6 +270,7 @@
     const gm = 'https://www.google.com/maps/dir/?api=1&destination=' + s.lat + ',' + s.lon;
     const osmDir = 'https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=' +
       (state.user ? state.user.lat + ',' + state.user.lon : '') + ';' + s.lat + ',' + s.lon;
+    const gmView = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(s.name + ' ' + s.lat + ',' + s.lon);
     const osmPage = s.osm ? 'https://www.openstreetmap.org/' + s.osm.type + '/' + s.osm.id : '';
     const editUrl = s.osm ? 'https://www.openstreetmap.org/edit?' + s.osm.type + '=' + s.osm.id : 'https://www.openstreetmap.org/edit#map=18/' + s.lat + '/' + s.lon;
     const web = s.website ? safeUrl(s.website) : '';
@@ -271,7 +296,7 @@
       (s.approx ? '<p class="note">This starter record has an <b>approximate</b> location and no connector details. Live OpenStreetMap data replaces it when a mapped station exists nearby. Confirm with the operator before travelling.</p>' :
         !s.kinds.length ? '<p class="note">Connector types and power aren\'t mapped for this station yet. You can add them on OpenStreetMap so everyone benefits.</p>' :
           '<p class="note">Crowd-sourced data from OpenStreetMap. Live availability isn\'t shown — check with the operator before travelling.</p>') +
-      '<div class="d-links">' + (osmPage ? '<a href="' + osmPage + '" target="_blank" rel="noopener">View on OSM</a>' : '') +
+      '<div class="d-links"><a href="' + esc(gmView) + '" target="_blank" rel="noopener">Latest on Google Maps ↗</a>' + (osmPage ? '<a href="' + osmPage + '" target="_blank" rel="noopener">View on OSM</a>' : '') +
       '<a href="' + editUrl + '" target="_blank" rel="noopener">Improve this data</a>' +
       (web ? '<a href="' + esc(web) + '" target="_blank" rel="noopener">Website</a>' : '') +
       '<a href="#" id="dCopy">Copy coordinates</a></div>';

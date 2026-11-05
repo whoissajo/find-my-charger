@@ -246,3 +246,10 @@ h1 span { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -w
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
 @media (max-width: 860px) { body.sheet-open .sheet-toggle { display: none; } body.sheet-open .map-ctrl { display: none; } }
+
+/* Map style picker */
+.style-menu { position: absolute; top: calc(100% + 8px); left: 0; min-width: 200px; padding: 6px; border-radius: 14px; background: var(--surface-solid); border: 1px solid var(--line); box-shadow: var(--shadow); display: grid; gap: 2px; }
+.style-menu[hidden] { display: none; }
+.style-menu button { text-align: left; padding: 9px 12px; border: 0; border-radius: 9px; background: transparent; font-weight: 600; }
+.style-menu button:hover { background: var(--surface-2); }
+.style-menu button[aria-checked="true"] { background: var(--accent); color: var(--accent-ink); }

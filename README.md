@@ -9,7 +9,8 @@ A free, open-source map of every EV charging station in Lahore. No build step, n
 - Marker clustering, search, **AC / DC** filters, saved ⭐ chargers, sort by name / power / nearest
 - "Nearest charger" button using browser geolocation (location never leaves your device)
 - Detail card: connector types, power, access, fee, hours, phone, website
-- Directions via free URL links (Google Maps and OpenStreetMap/OSRM), no key needed
+- Five free basemaps: Auto light/dark, OpenStreetMap, Esri Streets, Satellite, Terrain
+- Directions and "Latest on Google Maps" via free URL links (no key, nothing fetched from Google)
 - Shareable deep links (`#node/123456`)
 - **Export GeoJSON** of the filtered chargers, ready to open in [RustGIS Web](https://web.rustgis.app/) or the RustGIS desktop app
 - Light and dark themes, responsive layout with a mobile bottom sheet, keyboard shortcuts (`/` search, `Esc` close)
@@ -40,6 +41,8 @@ python3 -m http.server 8000     # or: npx serve .
 
 - Charger data: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, ODbL. Missing or wrong? Use **Improve this data** in any station card and everyone benefits.
 - Basemap: [CARTO](https://carto.com/attributions) raster tiles (free for light use), falling back to the OpenStreetMap tile server automatically if CARTO is blocked. Please respect the [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/) and don't hammer it; for heavy traffic, host your own tiles.
+- Extra basemaps (picker on the map): Esri Streets and Satellite imagery with labels (Esri's public tile servers, free for light, attributed use) and OpenTopoMap terrain (OSM + SRTM, CC-BY-SA).
+- **Google Maps:** its data and tiles can't be used for free in a website (that needs a paid, keyed API and its terms forbid scraping), so this app never fetches from Google. Every station card has *Directions* and *Latest on Google Maps* links that open Google Maps for that place, where visitors see Google's own hours, photos and reviews.
 - Map library: [Leaflet](https://leafletjs.com/) and Leaflet.markercluster, loaded from unpkg.
 - Overpass API is a shared community service that can rate-limit or be slow. The app retries across mirrors and falls back to saved data.
 

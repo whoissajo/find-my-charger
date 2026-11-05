@@ -1,0 +1,13 @@
+{
+  "name": "Lahore EV Finder",
+  "short_name": "EV Finder",
+  "description": "Every EV charger in Lahore on one free, open map.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

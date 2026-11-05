@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lahore EV Finder — every EV charger in Lahore on one free map</title>
+<meta name="description" content="Free, open-source map of EV charging stations in Lahore. Live OpenStreetMap data, AC/DC filters, nearest charger, directions and GeoJSON export for RustGIS. No API keys, no accounts.">
+<meta name="theme-color" content="#0b1220">
+<meta property="og:title" content="Lahore EV Finder">
+<meta property="og:description" content="Every EV charger in Lahore on one free, open map.">
+<meta property="og:type" content="website">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- Sidebar / bottom sheet -->
+  <aside class="panel" id="panel" aria-label="Charger list">
+    <div class="grabber" id="grabber" aria-hidden="true"></div>
+
+    <header class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>
+      </div>
+      <div class="brand-text">
+        <h1>Lahore <span>EV Finder</span></h1>
+        <p id="subtitle">Loading chargers…</p>
+      </div>
+      <button class="icon-btn" id="themeBtn" title="Toggle light / dark" aria-label="Toggle light or dark theme">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.5 0-1-.1-1.4A5.5 5.5 0 0 1 13.4 3.1C13 3 12.5 3 12 3z"/></svg>
+      </button>
+    </header>
+
+    <div class="search">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 14 15.5l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
+      <input id="q" type="search" placeholder="Search name, area, operator…" autocomplete="off" aria-label="Search chargers">
+      <button class="icon-btn small" id="locateBtn" title="Use my location" aria-label="Use my location">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.9 3A9 9 0 0 0 13 3.1V1h-2v2.1A9 9 0 0 0 3.1 11H1v2h2.1A9 9 0 0 0 11 20.9V23h2v-2.1A9 9 0 0 0 20.9 13H23v-2h-2.1zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>
+      </button>
+    </div>
+
+    <div class="filters" role="group" aria-label="Filters">
+      <button class="chip active" data-type="all" aria-pressed="true">All</button>
+      <button class="chip" data-type="DC" aria-pressed="false"><i class="dot dc"></i>DC fast</button>
+      <button class="chip" data-type="AC" aria-pressed="false"><i class="dot ac"></i>AC</button>
+      <button class="chip" id="favChip" aria-pressed="false">★ Saved</button>
+      <select id="sortSel" aria-label="Sort chargers">
+        <option value="name">A–Z</option>
+        <option value="near">Nearest</option>
+        <option value="power">Power</option>
+      </select>
+    </div>
+
+    <div class="stats" id="stats"></div>
+    <div class="banner" id="banner" hidden></div>
+
+    <ul class="list" id="list" aria-live="polite"></ul>
+
+    <footer class="panel-foot">
+      <button class="btn" id="exportBtn">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
+        Export GeoJSON
+      </button>
+      <a class="btn ghost" href="https://web.rustgis.app/" target="_blank" rel="noopener">Open RustGIS ↗</a>
+      <button class="btn ghost" id="refreshBtn" title="Reload live data">↻</button>
+    </footer>
+  </aside>
+
+  <!-- Map -->
+  <main class="map-wrap">
+    <div id="map" role="application" aria-label="Map of EV chargers in Lahore"></div>
+
+    <div class="map-ctrl">
+      <button class="btn glass" id="nearBtn">⚡ Nearest</button>
+      <button class="btn glass" id="fitBtn">Fit all</button>
+      <button class="btn glass" id="styleBtn" title="Change map tiles">Map: Auto</button>
+    </div>
+
+    <button class="sheet-toggle" id="sheetToggle" aria-label="Show charger list">☰ List <b id="countPill">0</b></button>
+
+    <div class="toast" id="toast" role="status" hidden></div>
+  </main>
+
+  <!-- Detail card -->
+  <section class="detail" id="detail" hidden aria-live="polite"></section>
+</div>
+
+<noscript><p style="padding:2rem;font-family:sans-serif">Lahore EV Finder needs JavaScript to draw the map.</p></noscript>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="js/data.js"></script>
+<script src="js/core.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,62 +1,62 @@
-# Lahore EV Finder
+# ⚡ Lahore EV Finder
 
-A fast, responsive Lahore-only EV charging directory. The map is rendered with Leaflet and public raster tiles (no WebGL requirement). Charger locations are loaded from OpenStreetMap through a Vercel Route Handler, with published Open Charge Map listings bundled as a first-paint/offline-service fallback.
+A free, open-source map of every EV charging station in Lahore. No build step, no framework, **no API keys, no accounts, no paid services**. It is plain HTML, CSS and JavaScript, so any static host can serve it.
 
 ## Features
 
-- Lahore map with searchable charger listings and markers visible immediately.
-- AC/DC filters, mapped connector and charging-power details.
-- Browser geolocation and Google Maps directions.
-- GeoJSON export that can be opened in RustGIS for geospatial analysis.
-- Responsive desktop and mobile layouts.
-- No proprietary map SDK or map API key required.
-
-## Charger coverage and data quality
-
-The live directory queries OpenStreetMap's `amenity=charging_station` features inside the Lahore search bounding box. It also includes a small set of published Lahore records with source-published coordinates from Open Charge Map so the map is useful while Overpass is offline.
-
-The bundled starter set is a fallback, not a complete inventory. It currently includes Total EV Charging Station (Gulberg III), HUBCO Green / Total Parco (Gulberg III), Go Green Avenue and EV Charger (Packages Mall), and Mall of Lahore (Cantt). Open Charge Map records can be old or not recently verified: the website labels them as source-reported, not live operational status. Connector details, access and opening hours are only shown when supplied by the source.
-
-See the Open Charge Map records linked from the station details. Check with a station/operator before travelling.
-
-## RustGIS workflow
-
-RustGIS is a standalone GIS application, not a drop-in React map widget. Use **Export GeoJSON** in the app, then open the downloaded `lahore-ev-chargers.geojson` in [RustGIS Web](https://web.rustgis.app/) or the desktop application. The export contains the visible filtered features and their source IDs/URLs.
+- Live charger data from OpenStreetMap (`amenity=charging_station`) through the free Overpass API, with four mirror servers tried in order
+- Saved data (1 hour) and an offline app shell, so the map still opens without a connection
+- Marker clustering, search, **AC / DC** filters, saved ⭐ chargers, sort by name / power / nearest
+- "Nearest charger" button using browser geolocation (location never leaves your device)
+- Detail card: connector types, power, access, fee, hours, phone, website
+- Directions via free URL links (Google Maps and OpenStreetMap/OSRM), no key needed
+- Shareable deep links (`#node/123456`)
+- **Export GeoJSON** of the filtered chargers, ready to open in [RustGIS Web](https://web.rustgis.app/) or the RustGIS desktop app
+- Light and dark themes, responsive layout with a mobile bottom sheet, keyboard shortcuts (`/` search, `Esc` close)
 
 ## Run locally
 
-Requires Node.js 20.9 or newer.
-
 ```bash
-npm install
-npm run dev
+python3 -m http.server 8000     # or: npx serve .
+# open http://localhost:8000
 ```
 
-Open http://localhost:3000.
+(Opening `index.html` directly from disk also draws the map, but the service worker and some browser APIs need `http://localhost` or HTTPS.)
 
-## Production checks
+## Deploy for free
 
-```bash
-npm run typecheck
-npm run build
-npm start
+| Host | How |
+|---|---|
+| **GitHub Pages** | Push to `main`; the included workflow `.github/workflows/pages.yml` publishes it. Enable *Settings → Pages → Source: GitHub Actions*. |
+| **Cloudflare Pages / Netlify / Vercel** | Import the repo, no build command, output directory `/` (root). |
+
+## Using the export in RustGIS
+
+1. Click **Export GeoJSON** (it exports whatever your current filters show).
+2. Open <https://web.rustgis.app/> or the desktop app and load `lahore-ev-chargers.geojson`.
+3. Each feature carries name, operator, AC/DC kind, max kW, sockets, access, fee, hours and the OSM source link.
+
+## Data, maps and attribution
+
+- Charger data: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, ODbL. Missing or wrong? Use **Improve this data** in any station card and everyone benefits.
+- Basemap: [CARTO](https://carto.com/attributions) raster tiles (free for light use), falling back to the OpenStreetMap tile server automatically if CARTO is blocked. Please respect the [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/) and don't hammer it; for heavy traffic, host your own tiles.
+- Map library: [Leaflet](https://leafletjs.com/) and Leaflet.markercluster, loaded from unpkg.
+- Overpass API is a shared community service that can rate-limit or be slow. The app retries across mirrors and falls back to saved data.
+
+**Limits you should know about:** OpenStreetMap shows where chargers are and, when mapped, their connectors, but it does **not** show live availability or whether a charger is working. Always confirm with the operator before a long trip. The four "starter" records in `js/data.js` use approximate locations and are hidden automatically once OSM has a station within 400 m.
+
+## Project layout
+
 ```
-
-## Deploy to Vercel
-
-Import `whoissajo/find-my-charger` into Vercel. Framework preset: **Next.js**. Root directory: repository root. No environment variables are required. Every push to `main` can deploy to production through Vercel's Git integration; pull requests can receive preview deployments.
-
-## Data and map providers
-
-- Charger records: [OpenStreetMap](https://www.openstreetmap.org/) via the [Overpass API](https://overpass-api.de/), plus a curated fallback from [Open Charge Map](https://openchargemap.org/). Both source records are linked from station details.
-- Basemap: [CARTO](https://carto.com/) raster tiles, with OpenStreetMap raster tiles as a fallback.
-- Map renderer: [Leaflet](https://leafletjs.com/).
-- Geospatial export/analysis: [RustGIS](https://github.com/opengeos/RustGIS).
-
-OpenStreetMap data is © OpenStreetMap contributors and is available under the Open Database License (ODbL). Open Charge Map records identify their applicable source license and contributor attribution. CARTO and OpenStreetMap map-tile attributions are displayed on the map.
-
-The Overpass service is a shared community service and may occasionally rate-limit or be unavailable. In that case, the site keeps the bundled published Lahore records visible and offers a retry rather than rendering an empty directory.
+index.html            page shell
+css/styles.css        design system (themes, cards, map pins, mobile sheet)
+js/core.js            pure logic: OSM parsing, distance, GeoJSON (works in Node too)
+js/app.js             map + UI
+js/data.js            tiny offline starter set
+sw.js                 offline app shell
+manifest.webmanifest  installable PWA
+```
 
 ## License
 
-Project source is released under the MIT License. Map and charger data remain subject to their respective provider terms and attribution requirements.
+MIT. Map and charger data stay under their providers' licences.

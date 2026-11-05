@@ -1,8 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
-import type { Map as MapLibreMap, Marker as MapLibreMarker } from "maplibre-gl";
+import {
+  AttributionControl,
+  Map as MapLibreMap,
+  Marker as MapLibreMarker,
+  NavigationControl,
+} from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 type ChargerType = "AC" | "DC" | "AC/DC" | "Unknown";
@@ -175,7 +179,7 @@ export default function ChargerMap() {
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
-    const map = new maplibregl.Map({
+    const map = new MapLibreMap({
       container: mapContainerRef.current,
       style: MAP_STYLE,
       center: LAHORE_CENTER,
@@ -191,11 +195,11 @@ export default function ChargerMap() {
     });
 
     map.addControl(
-      new maplibregl.NavigationControl({ showCompass: false, visualizePitch: false }),
+      new NavigationControl({ showCompass: false, visualizePitch: false }),
       "top-right",
     );
     map.addControl(
-      new maplibregl.AttributionControl({
+      new AttributionControl({
         compact: true,
         customAttribution: "EV locations © OpenStreetMap contributors",
       }),
@@ -266,7 +270,7 @@ export default function ChargerMap() {
       element.addEventListener("click", () => {
         setSelected(charger);
       });
-      return new maplibregl.Marker({ element, anchor: "center" })
+      return new MapLibreMarker({ element, anchor: "center" })
         .setLngLat([charger.lon, charger.lat])
         .addTo(map);
     });

@@ -38,7 +38,7 @@ export default function Home() {
           <span className="footer-copy">Built for the next mile.</span>
         </div>
         <div className="footer-sources">
-          <span>Map © OpenStreetMap contributors · CARTO</span>
+          <span>Basemap © OpenStreetMap · CARTO · Charger data © OSM / Open Charge Map</span>
           <a href="https://github.com/whoissajo/find-my-charger" target="_blank" rel="noreferrer">Open source ↗</a>
           <a href="https://web.rustgis.app/" target="_blank" rel="noreferrer">RustGIS ↗</a>
         </div>

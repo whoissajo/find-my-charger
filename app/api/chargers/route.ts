@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
+import { STARTER_CHARGERS, type ChargerRecord } from "@/app/data/chargers";
 
 export const runtime = "nodejs";
-export const revalidate = 1800;
-export const maxDuration = 30;
+export const revalidate = 900;
+export const maxDuration = 25;
 
 type OverpassElement = {
   type: "node" | "way" | "relation";
@@ -13,24 +14,8 @@ type OverpassElement = {
   tags?: Record<string, string>;
 };
 
-type Charger = {
-  id: string;
-  name: string;
-  lat: number;
-  lon: number;
-  type: "AC" | "DC" | "AC/DC" | "Unknown";
-  powerKw: number | null;
-  connectors: string[];
-  operator: string | null;
-  address: string | null;
-  area: string | null;
-  access: string | null;
-  openingHours: string | null;
-  osmUrl: string;
-};
-
 const LAHORE_BBOX = "31.20,74.00,31.70,74.60";
-const OVERPASS_QUERY = `[out:json][timeout:25];
+const OVERPASS_QUERY = `[out:json][timeout:15];
 (
   node["amenity"="charging_station"](${LAHORE_BBOX});
   way["amenity"="charging_station"](${LAHORE_BBOX});
@@ -81,14 +66,13 @@ function powerValue(tags: Record<string, string>): number | null {
       if (Number.isFinite(parsed) && parsed > 0 && parsed <= 1000) return parsed;
     }
   }
-
   return null;
 }
 
 function stationType(
   tags: Record<string, string>,
   connectors: string[],
-): Charger["type"] {
+): ChargerRecord["type"] {
   const output = [
     tags["charging_station:output"],
     tags["socket:type2:output"],
@@ -107,7 +91,7 @@ function stationType(
   return "Unknown";
 }
 
-function normalizeElement(element: OverpassElement): Charger | null {
+function normalizeElement(element: OverpassElement): ChargerRecord | null {
   const tags = element.tags ?? {};
   const lat = element.lat ?? element.center?.lat;
   const lon = element.lon ?? element.center?.lon;
@@ -117,10 +101,7 @@ function normalizeElement(element: OverpassElement): Charger | null {
     typeof lon !== "number" ||
     !Number.isFinite(lat) ||
     !Number.isFinite(lon) ||
-    lat < 31.0 ||
-    lat > 31.9 ||
-    lon < 73.8 ||
-    lon > 74.9
+    lat < 31.0 || lat > 31.9 || lon < 73.8 || lon > 74.9
   ) {
     return null;
   }
@@ -133,7 +114,7 @@ function normalizeElement(element: OverpassElement): Charger | null {
   ].filter(Boolean).join(", ");
 
   return {
-    id: `${element.type}-${element.id}`,
+    id: `osm-${element.type}-${element.id}`,
     name: tags.name || tags.brand || tags.operator || "EV charging station",
     lat,
     lon,
@@ -146,12 +127,33 @@ function normalizeElement(element: OverpassElement): Charger | null {
       tags["addr:district"] || tags["addr:city"] || null,
     access: tags.access || null,
     openingHours: tags.opening_hours || null,
+    source: "OpenStreetMap",
+    sourceUrl: `https://www.openstreetmap.org/${element.type}/${element.id}`,
+    reportedStatus: null,
     osmUrl: `https://www.openstreetmap.org/${element.type}/${element.id}`,
   };
 }
 
-export async function GET() {
-  const upstreamErrors: string[] = [];
+function mergeChargers(live: ChargerRecord[]): ChargerRecord[] {
+  const combined = [...STARTER_CHARGERS];
+
+  for (const charger of live) {
+    const duplicate = combined.some((existing) => {
+      const latDistance = Math.abs(existing.lat - charger.lat);
+      const lonDistance = Math.abs(existing.lon - charger.lon);
+      const sameName = existing.name.toLowerCase() === charger.name.toLowerCase();
+      return sameName && latDistance < 0.001 && lonDistance < 0.001;
+    });
+    if (!duplicate) combined.push(charger);
+  }
+
+  return combined.sort((a, b) =>
+    (b.powerKw ?? 0) - (a.powerKw ?? 0) || a.name.localeCompare(b.name),
+  );
+}
+
+async function fetchLiveChargers(): Promise<{ chargers: ChargerRecord[]; endpoint: string }> {
+  const failures: string[] = [];
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
     try {
@@ -159,69 +161,86 @@ export async function GET() {
       url.searchParams.set("data", OVERPASS_QUERY);
 
       const response = await fetch(url, {
+        method: "GET",
         headers: {
           Accept: "application/json",
-          "User-Agent": "LahoreEVFinder/1.0",
+          "User-Agent": "LahoreEVFinder/1.1 (https://github.com/whoissajo/find-my-charger)",
         },
-        next: { revalidate: 1800 },
-        signal: AbortSignal.timeout(14000),
+        cache: "no-store",
+        signal: AbortSignal.timeout(7500),
       });
 
       if (!response.ok) {
-        upstreamErrors.push(`${new URL(endpoint).hostname}: HTTP ${response.status}`);
+        failures.push(`${url.hostname}: HTTP ${response.status}`);
         continue;
       }
 
       const payload = (await response.json()) as { elements?: OverpassElement[] };
       if (!Array.isArray(payload.elements)) {
-        upstreamErrors.push(`${new URL(endpoint).hostname}: unexpected response`);
+        failures.push(`${url.hostname}: unexpected response`);
         continue;
       }
 
       const seen = new Set<string>();
       const chargers = payload.elements
         .map(normalizeElement)
-        .filter((item): item is Charger => {
+        .filter((item): item is ChargerRecord => {
           if (!item || seen.has(item.id)) return false;
           seen.add(item.id);
           return true;
-        })
-        .sort((a, b) => (b.powerKw ?? 0) - (a.powerKw ?? 0) || a.name.localeCompare(b.name));
-
-      return NextResponse.json(
-        {
-          chargers,
-          count: chargers.length,
-          source: "OpenStreetMap via Overpass API",
-          fetchedAt: new Date().toISOString(),
-          coverage: "Publicly mapped charging stations in the Lahore search area",
-        },
-        {
-          headers: {
-            "Cache-Control": "public, max-age=300, s-maxage=1800, stale-while-revalidate=3600",
-          },
-        },
-      );
+        });
+      return { chargers, endpoint: url.hostname };
     } catch (error) {
-      const reason = error instanceof Error ? error.message : "request failed";
-      upstreamErrors.push(`${new URL(endpoint).hostname}: ${reason}`);
+      failures.push(
+        `${new URL(endpoint).hostname}: ${error instanceof Error ? error.message : "request failed"}`,
+      );
     }
   }
 
-  return NextResponse.json(
-    {
-      chargers: [],
-      count: 0,
-      source: "OpenStreetMap via Overpass API",
-      fetchedAt: new Date().toISOString(),
-      error: "The public map data service is temporarily unavailable. Please retry shortly.",
-      diagnostics: upstreamErrors,
-    },
-    {
-      status: 503,
-      headers: {
-        "Cache-Control": "no-store",
+  throw new Error(failures.join(" | ") || "No OpenStreetMap data endpoint responded.");
+}
+
+export async function GET() {
+  try {
+    const live = await fetchLiveChargers();
+    const chargers = mergeChargers(live.chargers);
+    return NextResponse.json(
+      {
+        chargers,
+        count: chargers.length,
+        liveCount: live.chargers.length,
+        source: "OpenStreetMap + Open Charge Map",
+        liveSource: live.endpoint,
+        fetchedAt: new Date().toISOString(),
+        usingFallback: live.chargers.length === 0,
+        note: live.chargers.length === 0
+          ? "Showing published Lahore records while OpenStreetMap has no additional mapped stations in this search area."
+          : "Community map records are combined with published charger listings.",
       },
-    },
-  );
+      {
+        headers: {
+          "Cache-Control": "public, max-age=300, s-maxage=900, stale-while-revalidate=1800",
+        },
+      },
+    );
+  } catch (error) {
+    const chargers = mergeChargers([]);
+    return NextResponse.json(
+      {
+        chargers,
+        count: chargers.length,
+        liveCount: 0,
+        source: "Open Charge Map fallback",
+        fetchedAt: new Date().toISOString(),
+        usingFallback: true,
+        note: "The live OpenStreetMap service is temporarily unavailable. Showing published Lahore charger records instead.",
+        warning: error instanceof Error ? error.message : "OpenStreetMap is temporarily unavailable.",
+      },
+      {
+        headers: {
+          "Cache-Control": "public, max-age=300, s-maxage=900, stale-while-revalidate=1800",
+        },
+      },
+    );
+  }
 }
